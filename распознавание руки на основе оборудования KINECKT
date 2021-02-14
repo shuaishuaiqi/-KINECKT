@@ -1,0 +1,134 @@
+from pykinect import nui
+from pykinect.nui import JointId
+import numpy as np
+import time
+import cv2, re, thread, socket, sys
+kinect = nui.Runtime()
+skeletons = None
+SendText = str((None, None, None))
+Ip = '172.31.1.128'
+port = 40005
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.connect((Ip, port))
+except:
+   print('server not find or not open')
+   sys.exit()
+mtx = np.array([[510.65645695,   0.        , 328.42167795],
+             [  0.        , 510.7373239 , 220.13210127],
+             [  0.        , 0.        ,   1.        ]])
+dist = np.array([[ 0.0486872 , -0.34500637, -0.00405424,  0.00399334,  0.38496666]])
+newcameramtx = np.array([[502.07321167,   0.        , 331.01580582],
+                      [0.        , 501.42672729, 218.02745372],
+                      [0.        ,   0.        ,   1.        ]])
+skeleton_to_depth_image = nui.SkeletonEngine.skeleton_to_depth_image
+LEFT_ARM = (JointId.ShoulderCenter, 
+            JointId.ShoulderLeft, 
+            JointId.ElbowLeft, 
+            JointId.WristLeft,   
+            JointId.HandLeft)
+RIGHT_ARM = (JointId.ShoulderCenter, 
+             JointId.ShoulderRight, 
+             JointId.ElbowRight, 
+             JointId.WristRight, 
+             JointId.HandRight)
+LEFT_LEG = (JointId.HipCenter, 
+            JointId.HipLeft, 
+            JointId.KneeLeft, 
+            JointId.AnkleLeft, 
+            JointId.FootLeft)
+RIGHT_LEG = (JointId.HipCenter, 
+             JointId.HipRight, 
+             JointId.KneeRight, 
+             JointId.AnkleRight, 
+             JointId.FootRight)
+SPINE = (JointId.HipCenter, 
+         JointId.Spine, 
+         JointId.ShoulderCenter, 
+         JointId.Head)
+def getColorImage(frame):
+    global s, SendText, skeletons, deth
+    video = np.empty( ( 480, 640, 4 ), np.uint8 )
+    frame.image.copy_bits( video.ctypes.data )
+    video = cv2.undistort(video, mtx, dist, None, newcameramtx)
+    if skeletons is not None:
+        for index, data in enumerate(skeletons):
+            if data.eTrackingState != nui.SkeletonTrackingState.TRACKED: continue
+            handRightPosition = data.SkeletonPositions[nui.JointId.HandRight]
+            hr = nui.SkeletonEngine.skeleton_to_depth_image(handRightPosition, 640, 480)
+            wristRightPosition = data.SkeletonPositions[nui.JointId.WristRight]
+            wr = nui.SkeletonEngine.skeleton_to_depth_image(wristRightPosition, 640, 480)
+            ElbowRightPosition = data.SkeletonPositions[nui.JointId.ElbowRight]
+            er = nui.SkeletonEngine.skeleton_to_depth_image(ElbowRightPosition, 640, 480)
+            cv2.circle(video, (int(hr[0]), int(hr[1])), 20, (255, 0, 0), thickness=5)
+            cv2.circle(video, (int(wr[0]), int(wr[1])), 5, (0, 0, 255), thickness=5)
+            cv2.circle(video, (int(er[0]), int(er[1])), 5, (0, 0, 255), thickness=5)
+            cv2.line(video, (int(er[0]), int(er[1])), (int(wr[0]), int(wr[1])), (0, 255, 0), 5)
+            cv2.line(video, (int(hr[0]), int(hr[1])), (int(wr[0]), int(wr[1])), (0, 255, 0), 5)
+            print((int(hr[0]), int(hr[1])))
+            x = int(deth*10)
+            y = int(((int(hr[0])-320)*deth)/60.2)
+            z = int(((240-int(hr[1]))*deth)/66.7)
+            x = 1330 - x
+            y = -y + 310
+            z = z + 480
+            SendText = 'pointofhand:'+ str((x, y, z))
+            print('send:', SendText)
+            s.sendall(SendText.encode())
+            time.sleep(0.1)
+        skeletons =None
+    else:
+        SendText = 'pointofhand:'+ str((None, None, None))
+        print('send:', SendText)
+        s.sendall(SendText.encode())
+        time.sleep(0.1)
+    cv2.imshow('KINECT Video Stream', video )
+def getDepthImage(frame):
+    global deth
+    depth = np.empty((240,320,1),np.uint8)   
+    arr2d = (depth >> 3) & 4095 
+    arr2d >>= 4
+    frame.image.copy_bits(arr2d.ctypes.data)
+    arr2d = cv2.resize(arr2d, (640, 480))
+    if skeletons is not None:
+        for index, data in enumerate(skeletons):
+            if data.eTrackingState != nui.SkeletonTrackingState.TRACKED: continue
+            handRightPosition = data.SkeletonPositions[nui.JointId.HandRight]
+            hr = nui.SkeletonEngine.skeleton_to_depth_image(handRightPosition, 640, 480)
+            wristRightPosition = data.SkeletonPositions[nui.JointId.WristRight]
+            wr = nui.SkeletonEngine.skeleton_to_depth_image(wristRightPosition, 640, 480)
+            ElbowRightPosition = data.SkeletonPositions[nui.JointId.ElbowRight]
+            er = nui.SkeletonEngine.skeleton_to_depth_image(ElbowRightPosition, 640, 480)
+            if hr[1] > 480:
+                deth = arr2d[479, int(hr[0])]/(81.5)
+            elif hr[0] > 640:
+                deth = arr2d[int(hr[1]), 639]/(81.5)
+            else:
+                deth = arr2d[int(hr[1]), int(hr[0])]/(81.5)
+            
+            cv2.circle(arr2d, (int(hr[0]), int(hr[1])), 20, (255, 0, 0), thickness=5)
+            cv2.circle(arr2d, (int(wr[0]), int(wr[1])), 5, (0, 0, 255), thickness=5)
+            cv2.circle(arr2d, (int(er[0]), int(er[1])), 5, (0, 0, 255), thickness=5)
+            cv2.line(arr2d, (int(er[0]), int(er[1])), (int(wr[0]), int(wr[1])), (0, 255, 0), 5)
+            cv2.line(arr2d, (int(hr[0]), int(hr[1])), (int(wr[0]), int(wr[1])), (0, 255, 0), 5)
+    cv2.circle(arr2d, (320, 240), 5, (0, 0, 0), thickness=5)
+    cv2.imshow('KINECT depth Stream', arr2d)
+def skeleton_frame_ready(frame):
+    global skeletons
+    skeletons = frame.SkeletonData
+kinect.camera.elevation_angle=0
+kinect.skeleton_engine.enabled = True
+kinect.skeleton_frame_ready += skeleton_frame_ready
+kinect.video_frame_ready += getColorImage
+kinect.video_stream.open(nui.ImageStreamType.Video, 2, nui.ImageResolution.Resolution640x480, nui.ImageType.Color)
+cv2.namedWindow('KINECT Video Stream', cv2.WINDOW_AUTOSIZE)
+kinect.depth_frame_ready += getDepthImage
+kinect.depth_stream.open(nui.ImageStreamType.Depth, 2, nui.ImageResolution.Resolution320x240, nui.ImageType.Depth)
+cv2.namedWindow('KINECT depth Stream', cv2.WINDOW_AUTOSIZE)
+while True:
+    #frame = kinect.skeleton_engine.get_next_frame()
+    key = cv2.waitKey(0)        
+    if key == 27:           
+        cv2.destroyAllWindows()
+        kinect.close()
+        break   
